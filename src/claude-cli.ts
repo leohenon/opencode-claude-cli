@@ -541,13 +541,28 @@ function parseMaybeJson(value: string): unknown {
   }
 }
 
+function shortPath(value: string): string {
+  const cwd = process.cwd().replace(/\\/g, "/");
+  const normalized = value.replace(/\\/g, "/");
+  if (normalized.startsWith(`${cwd}/`)) return normalized.slice(cwd.length + 1);
+  return normalized;
+}
+
 function formatToolUseText(name?: string, input?: unknown): string {
   const toolName = trim(name) || "unknown";
-  if (!input || typeof input !== "object") return `[Claude Code used ${toolName}]`;
+  if (!input || typeof input !== "object") return `✱ ${toolName}`;
 
   const record = input as Record<string, unknown>;
-  const target = trim(record.file_path) || trim(record.filePath) || trim(record.description) || trim(record.command);
-  return target ? `[Claude Code used ${toolName}: ${target}]` : `[Claude Code used ${toolName}]`;
+  const filePath = trim(record.file_path) || trim(record.filePath);
+  if (filePath) return `✱ ${toolName} ${shortPath(filePath)}`;
+
+  const command = trim(record.command);
+  if (command) return `✱ ${toolName} ${command}`;
+
+  const description = trim(record.description);
+  if (description) return `✱ ${toolName} ${description}`;
+
+  return `✱ ${toolName}`;
 }
 
 function createSSEHeaders() {
@@ -665,7 +680,7 @@ function liveStreamResponse(
       let sawOutput = false;
       let sawStreamEvent = false;
       const textBlockMap = new Map<number, number>();
-      const toolUseMap = new Map<number, { name?: string; json: string; input?: unknown }>();
+      const toolUseMap = new Map<number, { id?: string; name?: string; json: string; input?: unknown }>();
 
       const enqueue = (chunk: string) => controller.enqueue(encoder.encode(chunk));
 
@@ -742,6 +757,7 @@ function liveStreamResponse(
 
             if (block?.type === "tool_use") {
               toolUseMap.set(sourceIndex, {
+                id: block.id,
                 name: block.name,
                 json: "",
                 input: block.input,
@@ -783,7 +799,7 @@ function liveStreamResponse(
             const tool = toolUseMap.get(sourceIndex);
             if (tool) {
               const parsed = tool.input ?? parseMaybeJson(tool.json);
-              const key = `${tool.name}:${safeJson(parsed)}`;
+              const key = tool.id || `${tool.name}:${safeJson(parsed)}`;
               if (!seenToolUse.has(key)) {
                 seenToolUse.add(key);
                 emitTextBlock(`${formatToolUseText(tool.name, parsed)}\n`);
@@ -802,7 +818,7 @@ function liveStreamResponse(
           }
         }
 
-        if (!sawStreamEvent && event.type === "assistant") {
+        if (event.type === "assistant") {
           for (const part of event.message?.content || []) {
             if (part?.type === "tool_use") {
               const key = part.id || `${part.name}:${safeJson(part.input)}`;
@@ -811,6 +827,8 @@ function liveStreamResponse(
               emitTextBlock(`${formatToolUseText(part.name, part.input)}\n`);
               continue;
             }
+
+            if (sawStreamEvent) continue;
 
             if (part?.type === "text" && typeof part.text === "string" && part.text) {
               emitTextBlock(part.text);
