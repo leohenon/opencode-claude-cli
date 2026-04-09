@@ -63,9 +63,12 @@ function createModel(id: string, name: string) {
 
 function createModelMap() {
   return {
+    "claude-opus-4-6": createModel("claude-opus-4-6", "Claude Opus 4.6"),
     "claude-sonnet-4-6": createModel("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-    "claude-opus-4-1": createModel("claude-opus-4-1", "Claude Opus 4.1"),
     "claude-haiku-4-5": createModel("claude-haiku-4-5", "Claude Haiku 4.5"),
+    opus: createModel("opus", "Claude Opus (latest alias)"),
+    sonnet: createModel("sonnet", "Claude Sonnet (latest alias)"),
+    haiku: createModel("haiku", "Claude Haiku (latest alias)"),
   };
 }
 

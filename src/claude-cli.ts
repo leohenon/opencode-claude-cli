@@ -40,6 +40,19 @@ type ClaudeJsonResult = {
   };
 };
 
+type ClaudeJsonEvent = {
+  type?: string;
+  subtype?: string;
+  result?: string;
+  session_id?: string;
+  usage?: ClaudeJsonResult["usage"];
+  message?: {
+    content?: Array<{ type?: string; text?: string }>;
+  };
+  content?: Array<{ type?: string; text?: string }>;
+  text?: string;
+};
+
 const AUTH_MARKER = "__claude_cli_local__";
 const LOG_PATH = process.env.OPENCODE_CLAUDE_CLI_LOG_PATH || "/tmp/opencode-claude-cli.log";
 const DEFAULT_ALLOWED_TOOLS = [
@@ -220,7 +233,7 @@ function inferModel(request: AnthropicRequest): string {
 }
 
 function makeArgs(request: AnthropicRequest): string[] {
-  const args = ["-p", buildPrompt(request), "--output-format", "json", "--verbose"];
+  const args = ["-p", buildPrompt(request), "--output-format", "json"];
   args.push("--model", inferModel(request));
 
   const maxTurns = trim(process.env.OPENCODE_CLAUDE_CLI_MAX_TURNS);
@@ -231,6 +244,48 @@ function makeArgs(request: AnthropicRequest): string[] {
 
   args.push(...getPermissionArgs());
   return args;
+}
+
+function extractTextFromEvents(events: ClaudeJsonEvent[]): string {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (typeof event.result === "string" && event.result.trim()) return event.result;
+
+    const messageText = event.message?.content
+      ?.filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text ?? "")
+      .join("\n")
+      .trim();
+    if (messageText) return messageText;
+
+    const contentText = event.content
+      ?.filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text ?? "")
+      .join("\n")
+      .trim();
+    if (contentText) return contentText;
+
+    if (typeof event.text === "string" && event.text.trim()) return event.text;
+  }
+  return "";
+}
+
+function normalizeClaudeOutput(parsed: unknown): ClaudeJsonResult {
+  if (Array.isArray(parsed)) {
+    const events = parsed as ClaudeJsonEvent[];
+    const resultEvent = [...events].reverse().find((event) => typeof event.result === "string") ?? events[events.length - 1];
+    return {
+      result: extractTextFromEvents(events),
+      session_id: resultEvent?.session_id,
+      usage: resultEvent?.usage,
+    };
+  }
+
+  if (parsed && typeof parsed === "object") {
+    return parsed as ClaudeJsonResult;
+  }
+
+  return { result: typeof parsed === "string" ? parsed : String(parsed ?? "") };
 }
 
 async function runClaude(request: AnthropicRequest, cwd: string): Promise<ClaudeJsonResult> {
@@ -268,7 +323,7 @@ async function runClaude(request: AnthropicRequest, cwd: string): Promise<Claude
       }
 
       try {
-        resolve(JSON.parse(stdout) as ClaudeJsonResult);
+        resolve(normalizeClaudeOutput(JSON.parse(stdout)));
       } catch (error) {
         reject(new Error(`Failed to parse Claude Code output as JSON: ${stdout.slice(0, 1000)}\n${String(error)}`));
       }
