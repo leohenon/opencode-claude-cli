@@ -47,10 +47,22 @@ type ClaudeJsonEvent = {
   session_id?: string;
   usage?: ClaudeJsonResult["usage"];
   message?: {
-    content?: Array<{ type?: string; text?: string }>;
+    id?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      id?: string;
+      name?: string;
+      input?: unknown;
+    }>;
   };
   content?: Array<{ type?: string; text?: string }>;
   text?: string;
+  tool_use_result?: {
+    stdout?: string;
+    stderr?: string;
+    interrupted?: boolean;
+  };
 };
 
 const AUTH_MARKER = "__claude_cli_local__";
@@ -233,7 +245,9 @@ function inferModel(request: AnthropicRequest): string {
 }
 
 function makeArgs(request: AnthropicRequest): string[] {
-  const args = ["-p", buildPrompt(request), "--output-format", "json"];
+  const outputFormat = request.stream ? "stream-json" : "json";
+  const args = ["-p", buildPrompt(request), "--output-format", outputFormat];
+  if (request.stream) args.push("--verbose");
   args.push("--model", inferModel(request));
 
   const maxTurns = trim(process.env.OPENCODE_CLAUDE_CLI_MAX_TURNS);
@@ -286,6 +300,14 @@ function normalizeClaudeOutput(parsed: unknown): ClaudeJsonResult {
   }
 
   return { result: typeof parsed === "string" ? parsed : String(parsed ?? "") };
+}
+
+function parseJsonLines(stdout: string): ClaudeJsonEvent[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as ClaudeJsonEvent);
 }
 
 async function runClaude(request: AnthropicRequest, cwd: string): Promise<ClaudeJsonResult> {
@@ -365,12 +387,12 @@ function jsonResponse(result: ClaudeJsonResult, model: string): Response {
   });
 }
 
-function streamResponse(result: ClaudeJsonResult, model: string): Response {
-  const messageId = makeMessageId(result.session_id);
-  const output = usage(result);
-  const text = result.result ?? "";
-
-  const body = [
+function streamResponseFromClaude(stdout: string, model: string): Response {
+  const events = parseJsonLines(stdout);
+  const resultEvent = [...events].reverse().find((event) => event.type === "result");
+  const output = usage({ usage: resultEvent?.usage });
+  const messageId = makeMessageId(resultEvent?.session_id);
+  const chunks: string[] = [
     sse("message_start", {
       type: "message_start",
       message: {
@@ -384,26 +406,81 @@ function streamResponse(result: ClaudeJsonResult, model: string): Response {
         usage: { input_tokens: output.input_tokens, output_tokens: 0 },
       },
     }),
-    sse("content_block_start", {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "text", text: "" },
-    }),
-    sse("content_block_delta", {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "text_delta", text },
-    }),
-    sse("content_block_stop", { type: "content_block_stop", index: 0 }),
+  ];
+
+  let index = 0;
+  const seenToolUse = new Set<string>();
+
+  for (const event of events) {
+    if (event.type !== "assistant") continue;
+    for (const part of event.message?.content || []) {
+      if (part?.type === "tool_use") {
+        const key = part.id || `${part.name}:${safeJson(part.input)}`;
+        if (seenToolUse.has(key)) continue;
+        seenToolUse.add(key);
+        chunks.push(
+          sse("content_block_start", {
+            type: "content_block_start",
+            index,
+            content_block: {
+              type: "tool_use",
+              id: part.id || `tool_${index}`,
+              name: part.name || "unknown",
+              input: part.input ?? {},
+            },
+          }),
+          sse("content_block_stop", { type: "content_block_stop", index }),
+        );
+        index += 1;
+        continue;
+      }
+
+      if (part?.type === "text" && typeof part.text === "string" && part.text) {
+        chunks.push(
+          sse("content_block_start", {
+            type: "content_block_start",
+            index,
+            content_block: { type: "text", text: "" },
+          }),
+          sse("content_block_delta", {
+            type: "content_block_delta",
+            index,
+            delta: { type: "text_delta", text: part.text },
+          }),
+          sse("content_block_stop", { type: "content_block_stop", index }),
+        );
+        index += 1;
+      }
+    }
+  }
+
+  if (index === 0) {
+    const text = normalizeClaudeOutput(events).result ?? "";
+    chunks.push(
+      sse("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      }),
+      sse("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text },
+      }),
+      sse("content_block_stop", { type: "content_block_stop", index: 0 }),
+    );
+  }
+
+  chunks.push(
     sse("message_delta", {
       type: "message_delta",
       delta: { stop_reason: "end_turn", stop_sequence: null },
       usage: { output_tokens: output.output_tokens },
     }),
     sse("message_stop", { type: "message_stop" }),
-  ].join("");
+  );
 
-  return new Response(body, {
+  return new Response(chunks.join(""), {
     status: 200,
     headers: {
       "content-type": "text/event-stream",
@@ -433,8 +510,31 @@ export async function handleClaudeCliFetch(input: RequestInfo | URL, init?: Requ
     const cwd = inferCwd(init);
     const model = inferModel(request);
     debugLog("handleClaudeCliFetch", { cwd, model, stream: !!request.stream });
+
+    if (request.stream) {
+      const command = getClaudePath();
+      const args = makeArgs(request);
+      debugLog("runClaude:stream:start", { command, args, cwd, model });
+      const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve, reject) => {
+        const child = spawn(command, args, {
+          cwd,
+          env: process.env,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk: Buffer | string) => { stdout += chunk.toString(); });
+        child.stderr.on("data", (chunk: Buffer | string) => { stderr += chunk.toString(); });
+        child.once("error", reject);
+        child.once("close", (code) => resolve({ stdout, stderr, code }));
+      });
+      debugLog("runClaude:stream:close", { code, stderr: stderr.slice(0, 1000), stdout: stdout.slice(0, 1000) });
+      if (code !== 0) throw new Error(stderr.trim() || stdout.trim() || `claude exited with code ${code}`);
+      return streamResponseFromClaude(stdout, model);
+    }
+
     const result = await runClaude(request, cwd);
-    return request.stream ? streamResponse(result, model) : jsonResponse(result, model);
+    return jsonResponse(result, model);
   } catch (error) {
     debugLog("handleClaudeCliFetch:error", { message: error instanceof Error ? error.message : String(error) });
     return errorResponse(error);
