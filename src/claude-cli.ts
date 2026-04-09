@@ -498,9 +498,15 @@ function makeMessageId(sessionId?: string): string {
   return `msg_${suffix.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 }
 
+function effectiveInputTokens(usage?: ClaudeJsonResult["usage"]): number {
+  return (usage?.input_tokens ?? 0)
+    + (usage?.cache_read_input_tokens ?? 0)
+    + (usage?.cache_creation_input_tokens ?? 0);
+}
+
 function usage(result: ClaudeJsonResult) {
   return {
-    input_tokens: result.usage?.input_tokens ?? 0,
+    input_tokens: effectiveInputTokens(result.usage),
     output_tokens: result.usage?.output_tokens ?? 0,
     cache_read_input_tokens: result.usage?.cache_read_input_tokens ?? 0,
     cache_creation_input_tokens: result.usage?.cache_creation_input_tokens ?? 0,
@@ -676,7 +682,7 @@ function liveStreamResponse(
             content: [],
             stop_reason: null,
             stop_sequence: null,
-            usage: { input_tokens: lastUsage?.input_tokens ?? 0, output_tokens: 0 },
+            usage: { input_tokens: effectiveInputTokens(lastUsage), output_tokens: 0 },
           },
         }));
       };
