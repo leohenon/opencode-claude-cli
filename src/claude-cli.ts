@@ -205,7 +205,18 @@ function formatMessages(messages: AnthropicRequest["messages"]): string {
     .join("\n\n");
 }
 
-function buildPrompt(request: AnthropicRequest): string {
+function getLatestUserMessage(messages: AnthropicRequest["messages"]): string {
+  if (!Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (trim(message?.role) !== "user") continue;
+    const content = typeof message.content === "string" ? message.content : flattenText(message.content);
+    if (content.trim()) return content.trim();
+  }
+  return "";
+}
+
+function buildPrompt(request: AnthropicRequest, options?: { resumed?: boolean }): string {
   const parts = [
     "You are running behind the OpenCode UI, but all execution must happen through Claude Code's own local CLI harness.",
     "Work in the current working directory. Use Claude Code tools normally when needed.",
@@ -214,8 +225,15 @@ function buildPrompt(request: AnthropicRequest): string {
   const system = formatSystem(request.system);
   if (system) parts.push(`SYSTEM:\n${system}`);
 
-  const transcript = formatMessages(request.messages);
-  if (transcript) parts.push(`CONVERSATION:\n${transcript}`);
+  if (options?.resumed) {
+    const latestUserMessage = getLatestUserMessage(request.messages);
+    if (latestUserMessage) {
+      parts.push(`LATEST USER MESSAGE:\n${latestUserMessage}`);
+    }
+  } else {
+    const transcript = formatMessages(request.messages);
+    if (transcript) parts.push(`CONVERSATION:\n${transcript}`);
+  }
 
   if (Array.isArray(request.tools) && request.tools.length) {
     const tools = request.tools.map((tool) => trim(tool.name)).filter(Boolean).join(", ");
@@ -317,8 +335,8 @@ function bindClaudeSessionID(opencodeSessionID: string, claudeSessionID?: string
 
 function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: string }): string[] {
   const outputFormat = request.stream ? "stream-json" : "json";
-  const args = ["-p", buildPrompt(request), "--output-format", outputFormat];
   const resumeSessionID = trim(options?.resumeSessionID);
+  const args = ["-p", buildPrompt(request, { resumed: !!resumeSessionID }), "--output-format", outputFormat];
   if (resumeSessionID) args.push("--resume", resumeSessionID);
   if (request.stream) args.push("--verbose", "--include-partial-messages");
   if (request.stream) args.push("--verbose");
