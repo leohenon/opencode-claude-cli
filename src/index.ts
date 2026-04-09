@@ -117,9 +117,6 @@ export const server: Plugin = async (input: PluginInput) => {
       const prefix = "You are Claude Code, Anthropic's official CLI for Claude.";
       if (input.model?.providerID === CLAUDE_CLI_PROVIDER_ID) {
         output.system.unshift(prefix);
-        if (output.system[1]) {
-          output.system[1] = `${prefix}\n\n${output.system[1]}`;
-        }
       }
     },
     provider: {
