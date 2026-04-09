@@ -5,7 +5,6 @@ import {
   ensureClaudeCliLoggedIn,
   handleClaudeCliFetch,
   isClaudeCliAuth,
-  isClaudeCliEnabled,
 } from "./claude-cli.js";
 
 const CLAUDE_CLI_PROVIDER_ID = "claude-code-cli";
@@ -131,20 +130,18 @@ export const server: Plugin = async (input: PluginInput) => {
       provider: CLAUDE_CLI_PROVIDER_ID,
       loader: (async (getAuth: () => Promise<unknown>, provider: any) => {
         const auth = await getAuth().catch(() => undefined);
-        const enabled = isClaudeCliEnabled();
         const modelEntries = provider?.models && typeof provider.models === "object"
           ? Object.values(provider.models)
           : [];
 
         debugLog("auth.loader", {
-          enabled,
           auth: isClaudeCliAuth(auth) ? "claude-cli" : typeof auth,
           providerID: provider?.id,
           providerName: provider?.name,
           hasProvider: !!provider,
           modelCount: modelEntries.length,
         });
-        if (!enabled && !isClaudeCliAuth(auth)) return {};
+        if (!isClaudeCliAuth(auth)) return {};
 
         debugLog("auth.loader:activated", {
           providerID: provider?.id,

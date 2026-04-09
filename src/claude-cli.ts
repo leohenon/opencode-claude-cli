@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-export type ClaudeCliAuth = {
+type ClaudeCliAuth = {
   type: "oauth";
   refresh: string;
   access?: string;
@@ -136,22 +136,6 @@ function formatClaudeCliError(error: unknown): Error {
   }
   if (error instanceof Error) return error;
   return new Error(String(error));
-}
-
-export function isClaudeCliEnabled(): boolean {
-  const value = trim(process.env.OPENCODE_CLAUDE_CLI_ENABLE).toLowerCase();
-  const enabled = ["1", "true", "yes", "on"].includes(value);
-  debugLog("isClaudeCliEnabled", { enabled, value });
-  return enabled;
-}
-
-export function createClaudeCliAuth(): ClaudeCliAuth {
-  return {
-    type: "oauth",
-    refresh: AUTH_MARKER,
-    access: AUTH_MARKER,
-    expires: Date.now() + 365 * 24 * 60 * 60 * 1000,
-  };
 }
 
 export function createClaudeCliCredentials() {
@@ -414,7 +398,6 @@ function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: strin
   const args = ["-p", buildPrompt(request, { resumed: !!resumeSessionID }), "--output-format", outputFormat];
   if (resumeSessionID) args.push("--resume", resumeSessionID);
   if (request.stream) args.push("--verbose", "--include-partial-messages");
-  if (request.stream) args.push("--verbose");
   args.push("--model", inferModel(request));
 
   const maxTurns = trim(process.env.OPENCODE_CLAUDE_CLI_MAX_TURNS);
@@ -604,83 +587,6 @@ function createSSEHeaders() {
     "cache-control": "no-cache",
     connection: "keep-alive",
   };
-}
-
-function streamResponseFromClaude(stdout: string, model: string): Response {
-  const events = parseJsonLines(stdout);
-  const resultEvent = [...events].reverse().find((event) => event.type === "result");
-  const output = usage({ usage: resultEvent?.usage });
-  const messageId = makeMessageId(resultEvent?.session_id);
-  const chunks: string[] = [
-    sse("message_start", {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model,
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: { input_tokens: output.input_tokens, output_tokens: 0 },
-      },
-    }),
-  ];
-
-  let index = 0;
-  const seenToolUse = new Set<string>();
-  const emitTextBlock = (text: string) => {
-    if (!text.trim()) return;
-    chunks.push(
-      sse("content_block_start", {
-        type: "content_block_start",
-        index,
-        content_block: { type: "text", text: "" },
-      }),
-      sse("content_block_delta", {
-        type: "content_block_delta",
-        index,
-        delta: { type: "text_delta", text },
-      }),
-      sse("content_block_stop", { type: "content_block_stop", index }),
-    );
-    index += 1;
-  };
-
-  for (const event of events) {
-    if (event.type !== "assistant") continue;
-    for (const part of event.message?.content || []) {
-      if (part?.type === "tool_use") {
-        const key = part.id || `${part.name}:${safeJson(part.input)}`;
-        if (seenToolUse.has(key)) continue;
-        seenToolUse.add(key);
-        emitTextBlock(`${formatToolUseText(part.name, part.input)}\n`);
-        continue;
-      }
-
-      if (part?.type === "text" && typeof part.text === "string" && part.text) {
-        emitTextBlock(part.text);
-      }
-    }
-  }
-
-  if (index === 0) {
-    emitTextBlock(normalizeClaudeOutput(events).result ?? "");
-  }
-
-  chunks.push(
-    sse("message_delta", {
-      type: "message_delta",
-      delta: { stop_reason: "end_turn", stop_sequence: null },
-      usage: { output_tokens: output.output_tokens },
-    }),
-    sse("message_stop", { type: "message_stop" }),
-  );
-
-  return new Response(chunks.join(""), {
-    status: 200,
-    headers: createSSEHeaders(),
-  });
 }
 
 function liveStreamResponse(
