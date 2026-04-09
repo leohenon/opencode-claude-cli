@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 type ClaudeCliAuth = {
@@ -14,6 +14,18 @@ type AnthropicContentBlock = {
   text?: string;
   name?: string;
   content?: unknown;
+  source?: {
+    type?: string;
+    data?: string;
+    media_type?: string;
+    url?: string;
+  };
+  image_url?: string | { url?: string };
+  mime_type?: string;
+  media_type?: string;
+  filename?: string;
+  title?: string;
+  file_name?: string;
 };
 
 type AnthropicMessage = {
@@ -110,6 +122,16 @@ const DEFAULT_ALLOWED_TOOLS = [
   "WebSearch",
 ];
 
+type PromptAttachmentContext = {
+  dir?: string;
+  count: number;
+};
+
+type ClaudeInvocation = {
+  args: string[];
+  attachmentDir?: string;
+};
+
 function trim(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -153,7 +175,7 @@ export function createClaudeCliCredentials() {
   };
 }
 
-export async function getClaudeAuthStatus(): Promise<{ loggedIn: boolean; raw?: unknown }> {
+export async function getClaudeAuthStatus(): Promise<{ loggedIn: boolean }> {
   const command = getClaudePath();
 
   return await new Promise((resolve, reject) => {
@@ -184,7 +206,6 @@ export async function getClaudeAuthStatus(): Promise<{ loggedIn: boolean; raw?: 
         const parsed = JSON.parse(stdout);
         resolve({
           loggedIn: !!parsed?.loggedIn,
-          raw: parsed,
         });
       } catch (error) {
         reject(new Error(`Failed to parse claude auth status output: ${stdout.slice(0, 500)}\n${String(error)}`));
@@ -235,17 +256,87 @@ function getPermissionArgs(request: AnthropicRequest): string[] {
   return args;
 }
 
-function flattenText(value: unknown): string {
+function ensurePromptAttachmentDir(context?: PromptAttachmentContext): string {
+  if (!context) return "";
+  if (context.dir) return context.dir;
+  context.dir = join(STATE_DIR, "attachments", crypto.randomUUID());
+  mkdirSync(context.dir, { recursive: true });
+  return context.dir;
+}
+
+function extensionForMediaType(mediaType?: string, fallbackType?: string): string {
+  const value = trim(mediaType).toLowerCase();
+  if (value === "image/png") return ".png";
+  if (value === "image/jpeg") return ".jpg";
+  if (value === "image/jpg") return ".jpg";
+  if (value === "image/webp") return ".webp";
+  if (value === "image/gif") return ".gif";
+  if (value === "image/svg+xml") return ".svg";
+  if (value === "application/pdf") return ".pdf";
+  if (fallbackType === "image" || fallbackType === "input_image") return ".png";
+  if (fallbackType === "document") return ".pdf";
+  return ".bin";
+}
+
+function parseDataUrl(value: string): { mediaType?: string; data: string } | undefined {
+  const match = value.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,(.*)$/s);
+  if (!match) return undefined;
+  return {
+    mediaType: trim(match[1]),
+    data: match[2],
+  };
+}
+
+function materializeAttachment(block: AnthropicContentBlock, context?: PromptAttachmentContext): string {
+  const source = block.source;
+  const imageUrl = typeof block.image_url === "string"
+    ? block.image_url
+    : trim(block.image_url?.url);
+  const inlineData = source?.type === "base64" && trim(source.data)
+    ? { mediaType: trim(source.media_type) || trim(block.media_type) || trim(block.mime_type), data: trim(source.data) }
+    : imageUrl.startsWith("data:")
+      ? parseDataUrl(imageUrl)
+      : undefined;
+
+  if (inlineData?.data) {
+    const dir = ensurePromptAttachmentDir(context);
+    const ext = extensionForMediaType(inlineData.mediaType, block.type);
+    const prefix = block.type === "document" ? "document" : "image";
+    const filename = `${prefix}-${String((context?.count ?? 0) + 1).padStart(2, "0")}${ext}`;
+    const path = join(dir, filename);
+    writeFileSync(path, Buffer.from(inlineData.data, "base64"));
+    if (context) context.count += 1;
+    const label = block.type === "document" ? "Attached document" : "Attached image";
+    return `[${label}: ${path}]`;
+  }
+
+  if (imageUrl) {
+    return `[Attached image URL: ${imageUrl}]`;
+  }
+
+  const fallbackName = trim(block.title) || trim(block.filename) || trim(block.file_name);
+  if (fallbackName) {
+    const label = block.type === "document" ? "Attached document" : "Attached file";
+    return `[${label}: ${fallbackName}]`;
+  }
+
+  return block.type === "document" ? "[Attached document]" : "[Attached image]";
+}
+
+function flattenText(value: unknown, context?: PromptAttachmentContext): string {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(flattenText).filter(Boolean).join("\n");
+  if (Array.isArray(value)) return value.map((item) => flattenText(item, context)).filter(Boolean).join("\n");
   if (!value || typeof value !== "object") return "";
 
   const block = value as AnthropicContentBlock;
   if (block.type === "text") return trim(block.text);
-  if (block.type === "tool_result") return flattenText(block.content);
+  if (block.type === "tool_result") return flattenText(block.content, context);
   if (block.type === "tool_use") return `[tool_use ${trim(block.name) || "unknown"}]`;
+  if (block.type === "image" || block.type === "input_image" || block.type === "document") {
+    return materializeAttachment(block, context);
+  }
   if ("text" in block && typeof block.text === "string") return block.text;
-  if ("content" in block) return flattenText(block.content);
+  if ("content" in block) return flattenText(block.content, context);
   return "";
 }
 
@@ -258,30 +349,30 @@ function formatSystem(system: AnthropicRequest["system"]): string {
     .join("\n\n");
 }
 
-function formatMessages(messages: AnthropicRequest["messages"]): string {
+function formatMessages(messages: AnthropicRequest["messages"], context?: PromptAttachmentContext): string {
   if (!Array.isArray(messages)) return "";
   return messages
     .map((message) => {
       const role = trim(message.role) || "user";
-      const content = typeof message.content === "string" ? message.content : flattenText(message.content);
+      const content = typeof message.content === "string" ? message.content : flattenText(message.content, context);
       return `${role.toUpperCase()}:\n${content.trim()}`.trim();
     })
     .filter(Boolean)
     .join("\n\n");
 }
 
-function getLatestUserMessage(messages: AnthropicRequest["messages"]): string {
+function getLatestUserMessage(messages: AnthropicRequest["messages"], context?: PromptAttachmentContext): string {
   if (!Array.isArray(messages)) return "";
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (trim(message?.role) !== "user") continue;
-    const content = typeof message.content === "string" ? message.content : flattenText(message.content);
+    const content = typeof message.content === "string" ? message.content : flattenText(message.content, context);
     if (content.trim()) return content.trim();
   }
   return "";
 }
 
-function buildPrompt(request: AnthropicRequest, options?: { resumed?: boolean }): string {
+function buildPrompt(request: AnthropicRequest, options?: { resumed?: boolean; attachmentContext?: PromptAttachmentContext }): string {
   const parts = [
     "You are running behind the OpenCode UI, but all execution must happen through Claude Code's own local CLI harness.",
     "Work in the current working directory. Use Claude Code tools normally when needed.",
@@ -291,13 +382,17 @@ function buildPrompt(request: AnthropicRequest, options?: { resumed?: boolean })
   if (system) parts.push(`SYSTEM:\n${system}`);
 
   if (options?.resumed) {
-    const latestUserMessage = getLatestUserMessage(request.messages);
+    const latestUserMessage = getLatestUserMessage(request.messages, options.attachmentContext);
     if (latestUserMessage) {
       parts.push(`LATEST USER MESSAGE:\n${latestUserMessage}`);
     }
   } else {
-    const transcript = formatMessages(request.messages);
+    const transcript = formatMessages(request.messages, options?.attachmentContext);
     if (transcript) parts.push(`CONVERSATION:\n${transcript}`);
+  }
+
+  if (options?.attachmentContext?.dir && options.attachmentContext.count > 0) {
+    parts.push("User attachments were saved as local files. If the user asked about an image or document, inspect the referenced file paths directly.");
   }
 
   if (Array.isArray(request.tools) && request.tools.length) {
@@ -398,13 +493,20 @@ function bindClaudeSessionID(opencodeSessionID: string, claudeSessionID?: string
   debugLog("sessionMap:bind", { bound: true });
 }
 
-function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: string }): string[] {
+function makeInvocation(request: AnthropicRequest, options?: { resumeSessionID?: string }): ClaudeInvocation {
   const outputFormat = request.stream ? "stream-json" : "json";
   const resumeSessionID = trim(options?.resumeSessionID);
-  const args = ["-p", buildPrompt(request, { resumed: !!resumeSessionID }), "--output-format", outputFormat];
+  const attachmentContext: PromptAttachmentContext = { count: 0 };
+  const args = [
+    "-p",
+    buildPrompt(request, { resumed: !!resumeSessionID, attachmentContext }),
+    "--output-format",
+    outputFormat,
+  ];
   if (resumeSessionID) args.push("--resume", resumeSessionID);
   if (request.stream) args.push("--verbose", "--include-partial-messages");
   args.push("--model", inferModel(request));
+  if (attachmentContext.dir) args.push("--add-dir", attachmentContext.dir);
 
   const maxTurns = trim(process.env.OPENCODE_CLAUDE_CLI_MAX_TURNS);
   if (maxTurns) args.push("--max-turns", maxTurns);
@@ -413,7 +515,20 @@ function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: strin
   if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
 
   args.push(...getPermissionArgs(request));
-  return args;
+  return {
+    args,
+    attachmentDir: attachmentContext.dir,
+  };
+}
+
+function cleanupAttachmentDir(path?: string): void {
+  const dir = trim(path);
+  if (!dir) return;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch (error) {
+    debugLog("attachment:cleanup:error", { message: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 function extractTextFromEvents(events: ClaudeJsonEvent[]): string {
@@ -468,7 +583,8 @@ function parseJsonLines(stdout: string): ClaudeJsonEvent[] {
 
 async function runClaude(request: AnthropicRequest, cwd: string, options?: { resumeSessionID?: string }): Promise<ClaudeJsonResult> {
   const command = getClaudePath();
-  const args = makeArgs(request, options);
+  const invocation = makeInvocation(request, options);
+  const args = invocation.args;
   debugLog("runClaude:start", {
     command,
     cwd,
@@ -497,6 +613,7 @@ async function runClaude(request: AnthropicRequest, cwd: string, options?: { res
 
     child.once("error", (error) => {
       const normalized = formatClaudeCliError(error);
+      cleanupAttachmentDir(invocation.attachmentDir);
       debugLog("runClaude:error", { message: normalized.message });
       reject(normalized);
     });
@@ -506,6 +623,7 @@ async function runClaude(request: AnthropicRequest, cwd: string, options?: { res
         stderrLength: stderr.length,
         stdoutLength: stdout.length,
       });
+      cleanupAttachmentDir(invocation.attachmentDir);
       if (code !== 0) {
         reject(new Error(stderr.trim() || stdout.trim() || `claude exited with code ${code}`));
         return;
@@ -612,7 +730,8 @@ function liveStreamResponse(
   options?: { opencodeSessionID?: string; resumeSessionID?: string; shouldBindSession?: boolean },
 ): Response {
   const command = getClaudePath();
-  const args = makeArgs(request, { resumeSessionID: options?.resumeSessionID });
+  const invocation = makeInvocation(request, { resumeSessionID: options?.resumeSessionID });
+  const args = invocation.args;
   debugLog("runClaude:stream:start", {
     command,
     cwd,
@@ -841,6 +960,7 @@ function liveStreamResponse(
 
       child.once("error", (error) => {
         const normalized = formatClaudeCliError(error);
+        cleanupAttachmentDir(invocation.attachmentDir);
         debugLog("runClaude:stream:error", { message: normalized.message });
         controller.error(normalized);
       });
@@ -855,6 +975,7 @@ function liveStreamResponse(
         }
 
         debugLog("runClaude:stream:close", { code, stderrLength: stderr.length });
+        cleanupAttachmentDir(invocation.attachmentDir);
 
         if (code !== 0) {
           controller.error(new Error(stderr.trim() || `claude exited with code ${code}`));

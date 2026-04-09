@@ -21,10 +21,13 @@ function createModel(id: string, name: string) {
     },
     name,
     family: "claude",
+    reasoning: true,
+    attachment: true,
+    toolcall: true,
     capabilities: {
       temperature: true,
       reasoning: true,
-      attachment: false,
+      attachment: true,
       toolcall: true,
       input: {
         text: true,
@@ -41,6 +44,10 @@ function createModel(id: string, name: string) {
         pdf: false,
       },
       interleaved: false,
+    },
+    modalities: {
+      input: ["text", "image", "pdf"],
+      output: ["text"],
     },
     cost: {
       input: 0,

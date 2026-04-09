@@ -36,7 +36,7 @@ Add the plugin to your OpenCode config:
 > [!NOTE]
 >
 > - Uses your local Claude Code login.
-> - Requests are routed through the local `claude` CLI, not Anthropic HTTP APIs.
+> - Requests are routed through the local `claude` CLI, not Anthropic API.
 > - Tool execution happens inside Claude Code's harness.
 > - OpenCode sessions are mapped to Claude Code sessions.
 
@@ -44,6 +44,7 @@ Add the plugin to your OpenCode config:
 
 - OpenCode plan mode is mapped to Claude Code plan mode.
 - Claude Code responses stream live into OpenCode.
+- Image and PDF uploads are forwarded to Claude Code.
 - Claude tool activity is shown in OpenCode as display-only transcript text.
 - Multiple Claude Code sessions can run concurrently because OpenCode sessions are mapped independently.
 
