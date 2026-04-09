@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "/Users/leohenon/dev/opencode-claude-cli"
+  ]
+}
