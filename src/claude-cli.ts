@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 export type ClaudeCliAuth = {
@@ -67,6 +67,7 @@ type ClaudeJsonEvent = {
 
 const AUTH_MARKER = "__claude_cli_local__";
 const LOG_PATH = process.env.OPENCODE_CLAUDE_CLI_LOG_PATH || "/tmp/opencode-claude-cli.log";
+const SESSION_MAP_PATH = process.env.OPENCODE_CLAUDE_CLI_SESSION_MAP_PATH || "/tmp/opencode-claude-cli-sessions.json";
 const DEFAULT_ALLOWED_TOOLS = [
   "Read",
   "Edit",
@@ -235,18 +236,71 @@ async function parseRequest(input: RequestInfo | URL, init?: RequestInit): Promi
   return bodyText ? (JSON.parse(bodyText) as AnthropicRequest) : {};
 }
 
+function inferHeaders(init?: RequestInit): Headers {
+  return new Headers(init?.headers);
+}
+
 function inferCwd(init?: RequestInit): string {
-  const headers = new Headers(init?.headers);
+  const headers = inferHeaders(init);
   return headers.get("x-opencode-cwd") || process.cwd();
+}
+
+function inferOpencodeSessionID(init?: RequestInit): string {
+  const headers = inferHeaders(init);
+  return trim(headers.get("x-opencode-session-id"));
 }
 
 function inferModel(request: AnthropicRequest): string {
   return trim(request.model) || trim(process.env.OPENCODE_CLAUDE_CLI_MODEL) || "claude-sonnet-4-6";
 }
 
-function makeArgs(request: AnthropicRequest): string[] {
+function loadSessionMap(): Record<string, string> {
+  try {
+    return JSON.parse(readFileSync(SESSION_MAP_PATH, "utf8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function saveSessionMap(map: Record<string, string>): void {
+  try {
+    mkdirSync(dirname(SESSION_MAP_PATH), { recursive: true });
+    writeFileSync(SESSION_MAP_PATH, JSON.stringify(map, null, 2), "utf8");
+  } catch (error) {
+    debugLog("sessionMap:save:error", { message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function shouldUseSessionBinding(request: AnthropicRequest): boolean {
+  const system = formatSystem(request.system).toLowerCase();
+  if (!system) return true;
+  if (system.includes("you are a title generator")) return false;
+  if (system.includes("generate a brief title")) return false;
+  return true;
+}
+
+function getBoundClaudeSessionID(opencodeSessionID: string): string {
+  if (!opencodeSessionID) return "";
+  return trim(loadSessionMap()[opencodeSessionID]);
+}
+
+function bindClaudeSessionID(opencodeSessionID: string, claudeSessionID?: string): void {
+  const cleanOpencode = trim(opencodeSessionID);
+  const cleanClaude = trim(claudeSessionID);
+  if (!cleanOpencode || !cleanClaude) return;
+  const map = loadSessionMap();
+  if (map[cleanOpencode] === cleanClaude) return;
+  map[cleanOpencode] = cleanClaude;
+  saveSessionMap(map);
+  debugLog("sessionMap:bind", { opencodeSessionID: cleanOpencode, claudeSessionID: cleanClaude });
+}
+
+function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: string }): string[] {
   const outputFormat = request.stream ? "stream-json" : "json";
   const args = ["-p", buildPrompt(request), "--output-format", outputFormat];
+  const resumeSessionID = trim(options?.resumeSessionID);
+  if (resumeSessionID) args.push("--resume", resumeSessionID);
+  if (request.stream) args.push("--verbose");
   if (request.stream) args.push("--verbose");
   args.push("--model", inferModel(request));
 
@@ -310,9 +364,9 @@ function parseJsonLines(stdout: string): ClaudeJsonEvent[] {
     .map((line) => JSON.parse(line) as ClaudeJsonEvent);
 }
 
-async function runClaude(request: AnthropicRequest, cwd: string): Promise<ClaudeJsonResult> {
+async function runClaude(request: AnthropicRequest, cwd: string, options?: { resumeSessionID?: string }): Promise<ClaudeJsonResult> {
   const command = getClaudePath();
-  const args = makeArgs(request);
+  const args = makeArgs(request, options);
   debugLog("runClaude:start", { command, args, cwd, model: inferModel(request) });
 
   return await new Promise<ClaudeJsonResult>((resolve, reject) => {
@@ -481,9 +535,14 @@ function streamResponseFromClaude(stdout: string, model: string): Response {
   });
 }
 
-function liveStreamResponse(request: AnthropicRequest, cwd: string, model: string): Response {
+function liveStreamResponse(
+  request: AnthropicRequest,
+  cwd: string,
+  model: string,
+  options?: { opencodeSessionID?: string; resumeSessionID?: string; shouldBindSession?: boolean },
+): Response {
   const command = getClaudePath();
-  const args = makeArgs(request);
+  const args = makeArgs(request, { resumeSessionID: options?.resumeSessionID });
   debugLog("runClaude:stream:start", { command, args, cwd, model });
 
   const encoder = new TextEncoder();
@@ -544,7 +603,12 @@ function liveStreamResponse(request: AnthropicRequest, cwd: string, model: strin
       };
 
       const processEvent = (event: ClaudeJsonEvent) => {
-        if (event.session_id) sessionId = event.session_id;
+        if (event.session_id) {
+          sessionId = event.session_id;
+          if (options?.shouldBindSession && options?.opencodeSessionID) {
+            bindClaudeSessionID(options.opencodeSessionID, event.session_id);
+          }
+        }
         if (event.usage) lastUsage = event.usage;
 
         if (event.type === "assistant") {
@@ -658,13 +722,25 @@ export async function handleClaudeCliFetch(input: RequestInfo | URL, init?: Requ
     const request = await parseRequest(input, init);
     const cwd = inferCwd(init);
     const model = inferModel(request);
-    debugLog("handleClaudeCliFetch", { cwd, model, stream: !!request.stream });
+    const opencodeSessionID = inferOpencodeSessionID(init);
+    const shouldBindSession = shouldUseSessionBinding(request) && !!opencodeSessionID;
+    const resumeSessionID = shouldBindSession ? getBoundClaudeSessionID(opencodeSessionID) : "";
+
+    debugLog("handleClaudeCliFetch", {
+      cwd,
+      model,
+      stream: !!request.stream,
+      opencodeSessionID,
+      shouldBindSession,
+      resumeSessionID,
+    });
 
     if (request.stream) {
-      return liveStreamResponse(request, cwd, model);
+      return liveStreamResponse(request, cwd, model, { opencodeSessionID, resumeSessionID, shouldBindSession });
     }
 
-    const result = await runClaude(request, cwd);
+    const result = await runClaude(request, cwd, { resumeSessionID });
+    if (shouldBindSession) bindClaudeSessionID(opencodeSessionID, result.session_id);
     return jsonResponse(result, model);
   } catch (error) {
     debugLog("handleClaudeCliFetch:error", { message: error instanceof Error ? error.message : String(error) });

@@ -101,6 +101,14 @@ export const server: Plugin = async (input: PluginInput) => {
         modelCount: Object.keys(config.provider?.[CLAUDE_CLI_PROVIDER_ID]?.models || {}).length,
       });
     },
+    "chat.headers": async (input: any, output: any) => {
+      if (input?.sessionID) {
+        output.headers["x-opencode-session-id"] = input.sessionID;
+      }
+      if (input?.message?.id) {
+        output.headers["x-opencode-message-id"] = input.message.id;
+      }
+    },
     "experimental.chat.system.transform": async (input: any, output: any) => {
       debugLog("hook:experimental.chat.system.transform", {
         providerID: input?.model?.providerID,
