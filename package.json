@@ -1,14 +1,7 @@
 {
   "name": "opencode-claude-cli",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "OpenCode plugin that uses the local Claude Code CLI as a provider",
-  "keywords": [
-    "opencode",
-    "plugin",
-    "claude",
-    "claude-code",
-    "cli"
-  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
