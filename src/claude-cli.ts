@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 export type ClaudeCliAuth = {
   type: "oauth";
@@ -86,8 +86,18 @@ type ClaudeJsonEvent = {
 };
 
 const AUTH_MARKER = "__claude_cli_local__";
-const LOG_PATH = process.env.OPENCODE_CLAUDE_CLI_LOG_PATH || "/tmp/opencode-claude-cli.log";
-const SESSION_MAP_PATH = process.env.OPENCODE_CLAUDE_CLI_SESSION_MAP_PATH || "/tmp/opencode-claude-cli-sessions.json";
+
+function defaultStateDir(): string {
+  const home = trim(process.env.HOME);
+  if (trim(process.env.XDG_STATE_HOME)) return join(trim(process.env.XDG_STATE_HOME), "opencode-claude-cli");
+  if (process.platform === "darwin" && home) return join(home, "Library", "Application Support", "opencode-claude-cli");
+  if (home) return join(home, ".local", "state", "opencode-claude-cli");
+  return "/tmp/opencode-claude-cli";
+}
+
+const STATE_DIR = defaultStateDir();
+const LOG_PATH = process.env.OPENCODE_CLAUDE_CLI_LOG_PATH || join(STATE_DIR, "plugin.log");
+const SESSION_MAP_PATH = process.env.OPENCODE_CLAUDE_CLI_SESSION_MAP_PATH || join(STATE_DIR, "sessions.json");
 const DEFAULT_ALLOWED_TOOLS = [
   "Read",
   "Edit",
