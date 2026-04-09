@@ -562,6 +562,11 @@ function shortPath(value: string): string {
   return normalized;
 }
 
+function shouldDisplayToolUse(name?: string): boolean {
+  const toolName = trim(name);
+  return toolName !== "ExitPlanMode";
+}
+
 function formatToolUseText(name?: string, input?: unknown): string {
   const toolName = trim(name) || "unknown";
   if (!input || typeof input !== "object") return `✱ ${toolName}`;
@@ -816,7 +821,9 @@ function liveStreamResponse(
               const key = tool.id || `${tool.name}:${safeJson(parsed)}`;
               if (!seenToolUse.has(key)) {
                 seenToolUse.add(key);
-                emitTextBlock(`${formatToolUseText(tool.name, parsed)}\n`);
+                if (shouldDisplayToolUse(tool.name)) {
+                  emitTextBlock(`${formatToolUseText(tool.name, parsed)}\n`);
+                }
               }
               toolUseMap.delete(sourceIndex);
             }
@@ -838,7 +845,9 @@ function liveStreamResponse(
               const key = part.id || `${part.name}:${safeJson(part.input)}`;
               if (seenToolUse.has(key)) continue;
               seenToolUse.add(key);
-              emitTextBlock(`${formatToolUseText(part.name, part.input)}\n`);
+              if (shouldDisplayToolUse(part.name)) {
+                emitTextBlock(`${formatToolUseText(part.name, part.input)}\n`);
+              }
               continue;
             }
 
