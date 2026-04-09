@@ -61,6 +61,28 @@ function createModel(id: string, name: string) {
   };
 }
 
+function createModelMap() {
+  return {
+    "claude-sonnet-4-6": createModel("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+    "claude-opus-4-1": createModel("claude-opus-4-1", "Claude Opus 4.1"),
+    "claude-haiku-4-5": createModel("claude-haiku-4-5", "Claude Haiku 4.5"),
+  };
+}
+
+function applyProviderConfig(config: any) {
+  config.provider ||= {};
+  config.provider[CLAUDE_CLI_PROVIDER_ID] ||= {};
+
+  const provider = config.provider[CLAUDE_CLI_PROVIDER_ID];
+  provider.name ||= CLAUDE_CLI_PROVIDER_NAME;
+  provider.npm ||= "@ai-sdk/anthropic";
+  provider.options ||= {};
+  provider.models = {
+    ...createModelMap(),
+    ...(provider.models || {}),
+  };
+}
+
 export const server: Plugin = async (input: PluginInput) => {
   debugLog("plugin:server:init", {
     directory: input.directory,
@@ -69,6 +91,13 @@ export const server: Plugin = async (input: PluginInput) => {
   });
 
   return {
+    config: async (config: any) => {
+      applyProviderConfig(config);
+      debugLog("hook:config", {
+        providerID: CLAUDE_CLI_PROVIDER_ID,
+        modelCount: Object.keys(config.provider?.[CLAUDE_CLI_PROVIDER_ID]?.models || {}).length,
+      });
+    },
     "experimental.chat.system.transform": async (input: any, output: any) => {
       debugLog("hook:experimental.chat.system.transform", {
         providerID: input?.model?.providerID,
@@ -84,11 +113,7 @@ export const server: Plugin = async (input: PluginInput) => {
     },
     provider: {
       id: CLAUDE_CLI_PROVIDER_ID,
-      models: async () => ({
-        "claude-sonnet-4-6": createModel("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-        "claude-opus-4-1": createModel("claude-opus-4-1", "Claude Opus 4.1"),
-        "claude-haiku-4-5": createModel("claude-haiku-4-5", "Claude Haiku 4.5"),
-      }),
+      models: async () => createModelMap(),
     } as any,
     auth: {
       provider: CLAUDE_CLI_PROVIDER_ID,
