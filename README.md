@@ -10,7 +10,9 @@ Use OpenCode with Claude Code as a provider.
 npm install -g opencode-claude-cli
 ```
 
-Add the plugin to your OpenCode config:
+## Configure
+
+`~/.config/opencode/opencode.json`
 
 ```json
 {
