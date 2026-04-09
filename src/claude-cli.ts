@@ -387,6 +387,15 @@ function jsonResponse(result: ClaudeJsonResult, model: string): Response {
   });
 }
 
+function formatToolUseText(name?: string, input?: unknown): string {
+  const toolName = trim(name) || "unknown";
+  if (!input || typeof input !== "object") return `[Claude Code used ${toolName}]`;
+
+  const record = input as Record<string, unknown>;
+  const target = trim(record.file_path) || trim(record.filePath) || trim(record.description) || trim(record.command);
+  return target ? `[Claude Code used ${toolName}: ${target}]` : `[Claude Code used ${toolName}]`;
+}
+
 function streamResponseFromClaude(stdout: string, model: string): Response {
   const events = parseJsonLines(stdout);
   const resultEvent = [...events].reverse().find((event) => event.type === "result");
@@ -410,6 +419,23 @@ function streamResponseFromClaude(stdout: string, model: string): Response {
 
   let index = 0;
   const seenToolUse = new Set<string>();
+  const emitTextBlock = (text: string) => {
+    if (!text.trim()) return;
+    chunks.push(
+      sse("content_block_start", {
+        type: "content_block_start",
+        index,
+        content_block: { type: "text", text: "" },
+      }),
+      sse("content_block_delta", {
+        type: "content_block_delta",
+        index,
+        delta: { type: "text_delta", text },
+      }),
+      sse("content_block_stop", { type: "content_block_stop", index }),
+    );
+    index += 1;
+  };
 
   for (const event of events) {
     if (event.type !== "assistant") continue;
@@ -418,57 +444,18 @@ function streamResponseFromClaude(stdout: string, model: string): Response {
         const key = part.id || `${part.name}:${safeJson(part.input)}`;
         if (seenToolUse.has(key)) continue;
         seenToolUse.add(key);
-        chunks.push(
-          sse("content_block_start", {
-            type: "content_block_start",
-            index,
-            content_block: {
-              type: "tool_use",
-              id: part.id || `tool_${index}`,
-              name: part.name || "unknown",
-              input: part.input ?? {},
-            },
-          }),
-          sse("content_block_stop", { type: "content_block_stop", index }),
-        );
-        index += 1;
+        emitTextBlock(`${formatToolUseText(part.name, part.input)}\n`);
         continue;
       }
 
       if (part?.type === "text" && typeof part.text === "string" && part.text) {
-        chunks.push(
-          sse("content_block_start", {
-            type: "content_block_start",
-            index,
-            content_block: { type: "text", text: "" },
-          }),
-          sse("content_block_delta", {
-            type: "content_block_delta",
-            index,
-            delta: { type: "text_delta", text: part.text },
-          }),
-          sse("content_block_stop", { type: "content_block_stop", index }),
-        );
-        index += 1;
+        emitTextBlock(part.text);
       }
     }
   }
 
   if (index === 0) {
-    const text = normalizeClaudeOutput(events).result ?? "";
-    chunks.push(
-      sse("content_block_start", {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "text", text: "" },
-      }),
-      sse("content_block_delta", {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "text_delta", text },
-      }),
-      sse("content_block_stop", { type: "content_block_stop", index: 0 }),
-    );
+    emitTextBlock(normalizeClaudeOutput(events).result ?? "");
   }
 
   chunks.push(
