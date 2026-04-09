@@ -130,6 +130,14 @@ function safeJson(value: unknown): string {
   }
 }
 
+function formatClaudeCliError(error: unknown): Error {
+  if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+    return new Error("Claude Code CLI was not found on PATH. Install the `claude` CLI or set OPENCODE_CLAUDE_CLI_PATH.");
+  }
+  if (error instanceof Error) return error;
+  return new Error(String(error));
+}
+
 export function isClaudeCliEnabled(): boolean {
   const value = trim(process.env.OPENCODE_CLAUDE_CLI_ENABLE).toLowerCase();
   const enabled = ["1", "true", "yes", "on"].includes(value);
@@ -175,7 +183,7 @@ export async function getClaudeAuthStatus(): Promise<{ loggedIn: boolean; raw?: 
       stderr += chunk.toString();
     });
 
-    child.once("error", (error) => reject(error));
+    child.once("error", (error) => reject(formatClaudeCliError(error)));
     child.once("close", (code) => {
       if (code !== 0) {
         reject(new Error(stderr.trim() || stdout.trim() || `claude auth status exited with code ${code}`));
@@ -498,8 +506,9 @@ async function runClaude(request: AnthropicRequest, cwd: string, options?: { res
     });
 
     child.once("error", (error) => {
-      debugLog("runClaude:error", { message: error.message });
-      reject(error);
+      const normalized = formatClaudeCliError(error);
+      debugLog("runClaude:error", { message: normalized.message });
+      reject(normalized);
     });
     child.once("close", (code) => {
       debugLog("runClaude:close", { code, stderr: stderr.slice(0, 1000), stdout: stdout.slice(0, 1000) });
@@ -909,8 +918,9 @@ function liveStreamResponse(
       });
 
       child.once("error", (error) => {
-        debugLog("runClaude:stream:error", { message: error.message });
-        controller.error(error);
+        const normalized = formatClaudeCliError(error);
+        debugLog("runClaude:stream:error", { message: normalized.message });
+        controller.error(normalized);
       });
 
       child.once("close", (code) => {
