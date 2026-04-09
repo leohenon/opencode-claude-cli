@@ -114,7 +114,13 @@ function trim(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isDebugEnabled(): boolean {
+  const value = trim(process.env.OPENCODE_CLAUDE_CLI_DEBUG).toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
 export function debugLog(message: string, extra?: unknown): void {
+  if (!isDebugEnabled()) return;
   try {
     mkdirSync(dirname(LOG_PATH), { recursive: true });
     const line = `[${new Date().toISOString()}] ${message}${typeof extra === "undefined" ? "" : ` ${safeJson(extra)}`}\n`;
