@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-cli",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "OpenCode plugin that uses the local Claude Code CLI as a provider",
   "keywords": [
     "opencode",
@@ -22,6 +22,14 @@
     "dist"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leohenon/opencode-claude-cli.git"
+  },
+  "homepage": "https://github.com/leohenon/opencode-claude-cli#readme",
+  "bugs": {
+    "url": "https://github.com/leohenon/opencode-claude-cli/issues"
+  },
   "engines": {
     "node": ">=18"
   },

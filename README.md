@@ -1,6 +1,6 @@
 # OpenCode Claude CLI
 
-![npm](https://img.shields.io/npm/v/opencode-claude-cli?style=flat-square&logo=npm&labelColor=4a4a4a&color=e03131) ![npm downloads](https://img.shields.io/npm/dm/opencode-claude-cli?style=flat-square&logo=npm&label=downloads&labelColor=4a4a4a&color=e03131)
+[![npm](https://img.shields.io/npm/v/opencode-claude-cli?style=flat-square&logo=npm&labelColor=4a4a4a&color=e03131)](https://www.npmjs.com/package/opencode-claude-cli)
 
 Use OpenCode with Claude Code as a provider.
 
