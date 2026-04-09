@@ -132,7 +132,7 @@ function safeJson(value: unknown): string {
 
 function formatClaudeCliError(error: unknown): Error {
   if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-    return new Error("Claude Code CLI was not found on PATH. Install the `claude` CLI or set OPENCODE_CLAUDE_CLI_PATH.");
+    return new Error("Claude Code was not found on PATH. Install the `claude` CLI or set OPENCODE_CLAUDE_CLI_PATH.");
   }
   if (error instanceof Error) return error;
   return new Error(String(error));
@@ -207,7 +207,7 @@ export async function ensureClaudeCliLoggedIn(): Promise<void> {
   const status = await getClaudeAuthStatus();
   debugLog("claude.auth.status", status.raw);
   if (!status.loggedIn) {
-    throw new Error("Claude Code CLI is not logged in. Run `claude auth login` and try again.");
+    throw new Error("Claude Code is not logged in. Run `claude auth login` and try again.");
   }
 }
 
@@ -234,16 +234,11 @@ function detectOpenCodePlanMode(request: AnthropicRequest): boolean {
 }
 
 function getPermissionArgs(request: AnthropicRequest): string[] {
-  const dangerous = trim(process.env.OPENCODE_CLAUDE_CLI_DANGEROUSLY_SKIP_PERMISSIONS).toLowerCase();
-  if (["1", "true", "yes", "on"].includes(dangerous)) {
-    return ["--dangerously-skip-permissions"];
-  }
+  const args: string[] = ["--dangerously-skip-permissions"];
 
-  const args: string[] = [];
-  const mode = detectOpenCodePlanMode(request)
-    ? "plan"
-    : trim(process.env.OPENCODE_CLAUDE_CLI_PERMISSION_MODE);
-  if (mode) args.push("--permission-mode", mode);
+  if (detectOpenCodePlanMode(request)) {
+    args.push("--permission-mode", "plan");
+  }
 
   const allowedTools = trim(process.env.OPENCODE_CLAUDE_CLI_ALLOWED_TOOLS) || DEFAULT_ALLOWED_TOOLS.join(",");
   args.push("--allowedTools", allowedTools);

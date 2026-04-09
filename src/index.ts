@@ -9,7 +9,7 @@ import {
 } from "./claude-cli.js";
 
 const CLAUDE_CLI_PROVIDER_ID = "claude-code-cli";
-const CLAUDE_CLI_PROVIDER_NAME = "Claude Code CLI";
+const CLAUDE_CLI_PROVIDER_NAME = "Claude Code";
 
 function createModel(id: string, name: string) {
   return {
@@ -181,7 +181,7 @@ export const server: Plugin = async (input: PluginInput) => {
             await ensureClaudeCliLoggedIn();
             return {
               url: "https://claude.ai/code",
-              instructions: "Uses your local Claude Code CLI login. No authorization code is needed here. If Claude CLI is already logged in, press enter to activate. Otherwise run: claude auth login",
+              instructions: "Uses your local Claude Code login. No authorization code is needed here. If Claude Code is already logged in, press enter to activate. Otherwise run: claude auth login",
               method: "auto" as const,
               callback: async () => {
                 debugLog("auth.method.callback");
