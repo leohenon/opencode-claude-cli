@@ -2,6 +2,7 @@ import type { Plugin, PluginInput, PluginModule } from "@opencode-ai/plugin";
 import {
   createClaudeCliCredentials,
   debugLog,
+  ensureClaudeCliLoggedIn,
   handleClaudeCliFetch,
   isClaudeCliAuth,
   isClaudeCliEnabled,
@@ -177,12 +178,14 @@ export const server: Plugin = async (input: PluginInput) => {
           type: "oauth",
           authorize: async () => {
             debugLog("auth.method.authorize");
+            await ensureClaudeCliLoggedIn();
             return {
               url: "https://claude.ai/code",
-              instructions: "Press enter to activate the local Claude Code CLI backend.",
+              instructions: "Claude Code CLI is already logged in. Press enter to activate this provider in OpenCode.",
               method: "auto" as const,
               callback: async () => {
                 debugLog("auth.method.callback");
+                await ensureClaudeCliLoggedIn();
                 return {
                   ...createClaudeCliCredentials(),
                   provider: CLAUDE_CLI_PROVIDER_ID,

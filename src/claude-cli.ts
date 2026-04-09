@@ -145,6 +145,54 @@ export function createClaudeCliCredentials() {
   };
 }
 
+export async function getClaudeAuthStatus(): Promise<{ loggedIn: boolean; raw?: unknown }> {
+  const command = getClaudePath();
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, ["auth", "status"], {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+
+    child.once("error", (error) => reject(error));
+    child.once("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || stdout.trim() || `claude auth status exited with code ${code}`));
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(stdout);
+        resolve({
+          loggedIn: !!parsed?.loggedIn,
+          raw: parsed,
+        });
+      } catch (error) {
+        reject(new Error(`Failed to parse claude auth status output: ${stdout.slice(0, 500)}\n${String(error)}`));
+      }
+    });
+  });
+}
+
+export async function ensureClaudeCliLoggedIn(): Promise<void> {
+  const status = await getClaudeAuthStatus();
+  debugLog("claude.auth.status", status.raw);
+  if (!status.loggedIn) {
+    throw new Error("Claude Code CLI is not logged in. Run `claude auth login` and try again.");
+  }
+}
+
 export function isClaudeCliAuth(value: unknown): value is ClaudeCliAuth {
   if (!value || typeof value !== "object") return false;
   const auth = value as Partial<ClaudeCliAuth>;
@@ -860,6 +908,7 @@ function errorResponse(error: unknown): Response {
 
 export async function handleClaudeCliFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
+    await ensureClaudeCliLoggedIn();
     const request = await parseRequest(input, init);
     const cwd = inferCwd(init);
     const model = inferModel(request);
