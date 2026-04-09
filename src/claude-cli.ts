@@ -203,14 +203,28 @@ function getClaudePath(): string {
   return trim(process.env.OPENCODE_CLAUDE_CLI_PATH) || "claude";
 }
 
-function getPermissionArgs(): string[] {
+function detectOpenCodePlanMode(request: AnthropicRequest): boolean {
+  const haystack = [
+    formatSystem(request.system),
+    formatMessages(request.messages),
+  ].join("\n\n").toLowerCase();
+
+  return haystack.includes("plan mode active")
+    || haystack.includes("you are in read-only phase")
+    || haystack.includes("strictly forbidden")
+    || haystack.includes("must not make edits");
+}
+
+function getPermissionArgs(request: AnthropicRequest): string[] {
   const dangerous = trim(process.env.OPENCODE_CLAUDE_CLI_DANGEROUSLY_SKIP_PERMISSIONS).toLowerCase();
   if (["1", "true", "yes", "on"].includes(dangerous)) {
     return ["--dangerously-skip-permissions"];
   }
 
   const args: string[] = [];
-  const mode = trim(process.env.OPENCODE_CLAUDE_CLI_PERMISSION_MODE);
+  const mode = detectOpenCodePlanMode(request)
+    ? "plan"
+    : trim(process.env.OPENCODE_CLAUDE_CLI_PERMISSION_MODE);
   if (mode) args.push("--permission-mode", mode);
 
   const allowedTools = trim(process.env.OPENCODE_CLAUDE_CLI_ALLOWED_TOOLS) || DEFAULT_ALLOWED_TOOLS.join(",");
@@ -396,7 +410,7 @@ function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: strin
   const appendSystemPrompt = trim(process.env.OPENCODE_CLAUDE_CLI_APPEND_SYSTEM_PROMPT);
   if (appendSystemPrompt) args.push("--append-system-prompt", appendSystemPrompt);
 
-  args.push(...getPermissionArgs());
+  args.push(...getPermissionArgs(request));
   return args;
 }
 
