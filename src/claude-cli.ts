@@ -195,7 +195,7 @@ export async function getClaudeAuthStatus(): Promise<{ loggedIn: boolean; raw?: 
 
 export async function ensureClaudeCliLoggedIn(): Promise<void> {
   const status = await getClaudeAuthStatus();
-  debugLog("claude.auth.status", status.raw);
+  debugLog("claude.auth.status", { loggedIn: status.loggedIn });
   if (!status.loggedIn) {
     throw new Error("Claude Code is not logged in. Run `claude auth login` and try again.");
   }
@@ -395,7 +395,7 @@ function bindClaudeSessionID(opencodeSessionID: string, claudeSessionID?: string
   if (map[cleanOpencode] === cleanClaude) return;
   map[cleanOpencode] = cleanClaude;
   saveSessionMap(map);
-  debugLog("sessionMap:bind", { opencodeSessionID: cleanOpencode, claudeSessionID: cleanClaude });
+  debugLog("sessionMap:bind", { bound: true });
 }
 
 function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: string }): string[] {
@@ -469,7 +469,13 @@ function parseJsonLines(stdout: string): ClaudeJsonEvent[] {
 async function runClaude(request: AnthropicRequest, cwd: string, options?: { resumeSessionID?: string }): Promise<ClaudeJsonResult> {
   const command = getClaudePath();
   const args = makeArgs(request, options);
-  debugLog("runClaude:start", { command, args, cwd, model: inferModel(request) });
+  debugLog("runClaude:start", {
+    command,
+    cwd,
+    model: inferModel(request),
+    stream: !!request.stream,
+    resumed: !!trim(options?.resumeSessionID),
+  });
 
   return await new Promise<ClaudeJsonResult>((resolve, reject) => {
     const child = spawn(command, args, {
@@ -495,7 +501,11 @@ async function runClaude(request: AnthropicRequest, cwd: string, options?: { res
       reject(normalized);
     });
     child.once("close", (code) => {
-      debugLog("runClaude:close", { code, stderr: stderr.slice(0, 1000), stdout: stdout.slice(0, 1000) });
+      debugLog("runClaude:close", {
+        code,
+        stderrLength: stderr.length,
+        stdoutLength: stdout.length,
+      });
       if (code !== 0) {
         reject(new Error(stderr.trim() || stdout.trim() || `claude exited with code ${code}`));
         return;
@@ -603,7 +613,12 @@ function liveStreamResponse(
 ): Response {
   const command = getClaudePath();
   const args = makeArgs(request, { resumeSessionID: options?.resumeSessionID });
-  debugLog("runClaude:stream:start", { command, args, cwd, model });
+  debugLog("runClaude:stream:start", {
+    command,
+    cwd,
+    model,
+    resumed: !!trim(options?.resumeSessionID),
+  });
 
   const encoder = new TextEncoder();
 
@@ -815,7 +830,7 @@ function liveStreamResponse(
           try {
             processEvent(JSON.parse(trimmed) as ClaudeJsonEvent);
           } catch (error) {
-            debugLog("runClaude:stream:parse_error", { line: trimmed.slice(0, 500), error: String(error) });
+            debugLog("runClaude:stream:parse_error", { lineLength: trimmed.length, error: String(error) });
           }
         }
       });
@@ -835,11 +850,11 @@ function liveStreamResponse(
           try {
             processEvent(JSON.parse(buffer.trim()) as ClaudeJsonEvent);
           } catch (error) {
-            debugLog("runClaude:stream:trailing_parse_error", { line: buffer.trim().slice(0, 500), error: String(error) });
+            debugLog("runClaude:stream:trailing_parse_error", { lineLength: buffer.trim().length, error: String(error) });
           }
         }
 
-        debugLog("runClaude:stream:close", { code, stderr: stderr.slice(0, 1000) });
+        debugLog("runClaude:stream:close", { code, stderrLength: stderr.length });
 
         if (code !== 0) {
           controller.error(new Error(stderr.trim() || `claude exited with code ${code}`));
@@ -894,9 +909,9 @@ export async function handleClaudeCliFetch(input: RequestInfo | URL, init?: Requ
       cwd,
       model,
       stream: !!request.stream,
-      opencodeSessionID,
+      hasOpencodeSessionID: !!opencodeSessionID,
       shouldBindSession,
-      resumeSessionID,
+      resumed: !!resumeSessionID,
     });
 
     if (request.stream) {
