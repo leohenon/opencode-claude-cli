@@ -46,7 +46,7 @@ npm install -g opencode-claude-cli
 
 - OpenCode plan mode is mapped to Claude Code plan mode.
 - Claude Code responses stream live into OpenCode.
-- Image and PDF uploads are forwarded to Claude Code.
+- Image and file uploads are forwarded to Claude Code.
 - Claude tool activity is shown in OpenCode as display-only transcript text.
 - Multiple Claude Code sessions can run concurrently because OpenCode sessions are mapped independently.
 - `/fork` and `/export` work as expected with claude code models.
@@ -55,8 +55,7 @@ npm install -g opencode-claude-cli
 
 - **Permissions are not interactive**: This plugin always runs Claude Code with `--dangerously-skip-permissions`.
 - **MCP servers are Claude-side**: Claude Code uses its own MCP servers (for example from `~/.claude/settings.json`), not the ones configured in OpenCode.
-- **Tool execution is Claude-side**: OpenCode built-in tool execution, permission prompts, and tool UI are not the source of truth for Claude Code requests.
-- **Tool rendering is approximate**: Tool activity is displayed as text in OpenCode, it is not rendered as native OpenCode tool execution events.
+- **Tool rendering is Claude-side**: Tool activity is displayed as text in OpenCode, it is not rendered as native OpenCode tool execution events.
 - **Custom modes are not mapped**: OpenCode custom modes are not mapped to Claude Code.
 - **Claude Code slash-command compatibility is partial**: Some `/` commands may not work as exepected.
 
