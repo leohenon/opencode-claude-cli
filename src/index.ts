@@ -181,7 +181,7 @@ export const server: Plugin = async (input: PluginInput) => {
             await ensureClaudeCliLoggedIn();
             return {
               url: "https://claude.ai/code",
-              instructions: "Claude Code CLI is already logged in. Press enter to activate this provider in OpenCode.",
+              instructions: "Uses your local Claude Code CLI login. No authorization code is needed here. If Claude CLI is already logged in, press enter to activate. Otherwise run: claude auth login",
               method: "auto" as const,
               callback: async () => {
                 debugLog("auth.method.callback");
