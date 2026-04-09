@@ -65,6 +65,7 @@ Add the plugin to your OpenCode config:
 - **`Claude Code was not found on PATH`**: install the `claude` CLI or set `OPENCODE_CLAUDE_CLI_PATH`.
 - **`Claude Code is not logged in`**: run `claude auth login`.
 - **`/connect` succeeds but requests fail**: restart OpenCode after changing plugin config or Claude login state.
+- **Need plugin debug logs?** Start OpenCode with `OPENCODE_CLAUDE_CLI_DEBUG=1`.
 
 ## License
 
