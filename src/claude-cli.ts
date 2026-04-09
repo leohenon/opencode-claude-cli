@@ -46,6 +46,26 @@ type ClaudeJsonEvent = {
   result?: string;
   session_id?: string;
   usage?: ClaudeJsonResult["usage"];
+  event?: {
+    type?: string;
+    index?: number;
+    message?: {
+      usage?: ClaudeJsonResult["usage"];
+    };
+    content_block?: {
+      type?: string;
+      id?: string;
+      name?: string;
+      input?: unknown;
+      text?: string;
+    };
+    delta?: {
+      type?: string;
+      text?: string;
+      partial_json?: string;
+    };
+    usage?: ClaudeJsonResult["usage"];
+  };
   message?: {
     id?: string;
     content?: Array<{
@@ -300,7 +320,7 @@ function makeArgs(request: AnthropicRequest, options?: { resumeSessionID?: strin
   const args = ["-p", buildPrompt(request), "--output-format", outputFormat];
   const resumeSessionID = trim(options?.resumeSessionID);
   if (resumeSessionID) args.push("--resume", resumeSessionID);
-  if (request.stream) args.push("--verbose");
+  if (request.stream) args.push("--verbose", "--include-partial-messages");
   if (request.stream) args.push("--verbose");
   args.push("--model", inferModel(request));
 
@@ -441,6 +461,14 @@ function jsonResponse(result: ClaudeJsonResult, model: string): Response {
   });
 }
 
+function parseMaybeJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function formatToolUseText(name?: string, input?: unknown): string {
   const toolName = trim(name) || "unknown";
   if (!input || typeof input !== "object") return `[Claude Code used ${toolName}]`;
@@ -563,6 +591,9 @@ function liveStreamResponse(
       let lastUsage: ClaudeJsonResult["usage"] | undefined;
       let sessionId: string | undefined;
       let sawOutput = false;
+      let sawStreamEvent = false;
+      const textBlockMap = new Map<number, number>();
+      const toolUseMap = new Map<number, { name?: string; json: string; input?: unknown }>();
 
       const enqueue = (chunk: string) => controller.enqueue(encoder.encode(chunk));
 
@@ -611,7 +642,95 @@ function liveStreamResponse(
         }
         if (event.usage) lastUsage = event.usage;
 
-        if (event.type === "assistant") {
+        if (event.type === "stream_event" && event.event) {
+          sawStreamEvent = true;
+          const inner = event.event;
+          if (inner.message?.usage) lastUsage = inner.message.usage;
+          if (inner.usage) lastUsage = inner.usage;
+
+          if (inner.type === "message_start") {
+            ensureMessageStart();
+            return;
+          }
+
+          if (inner.type === "content_block_start") {
+            const sourceIndex = inner.index ?? -1;
+            const block = inner.content_block;
+            if (block?.type === "text") {
+              ensureMessageStart();
+              const targetIndex = blockIndex++;
+              textBlockMap.set(sourceIndex, targetIndex);
+              enqueue(sse("content_block_start", {
+                type: "content_block_start",
+                index: targetIndex,
+                content_block: { type: "text", text: "" },
+              }));
+              return;
+            }
+
+            if (block?.type === "tool_use") {
+              toolUseMap.set(sourceIndex, {
+                name: block.name,
+                json: "",
+                input: block.input,
+              });
+            }
+            return;
+          }
+
+          if (inner.type === "content_block_delta") {
+            const sourceIndex = inner.index ?? -1;
+            const delta = inner.delta;
+            const textIndex = textBlockMap.get(sourceIndex);
+            if (delta?.type === "text_delta" && typeof delta.text === "string" && typeof textIndex === "number") {
+              sawOutput = true;
+              enqueue(sse("content_block_delta", {
+                type: "content_block_delta",
+                index: textIndex,
+                delta: { type: "text_delta", text: delta.text },
+              }));
+              return;
+            }
+
+            if (delta?.type === "input_json_delta") {
+              const tool = toolUseMap.get(sourceIndex);
+              if (tool) tool.json += delta.partial_json ?? "";
+            }
+            return;
+          }
+
+          if (inner.type === "content_block_stop") {
+            const sourceIndex = inner.index ?? -1;
+            const textIndex = textBlockMap.get(sourceIndex);
+            if (typeof textIndex === "number") {
+              enqueue(sse("content_block_stop", { type: "content_block_stop", index: textIndex }));
+              textBlockMap.delete(sourceIndex);
+              return;
+            }
+
+            const tool = toolUseMap.get(sourceIndex);
+            if (tool) {
+              const parsed = tool.input ?? parseMaybeJson(tool.json);
+              const key = `${tool.name}:${safeJson(parsed)}`;
+              if (!seenToolUse.has(key)) {
+                seenToolUse.add(key);
+                emitTextBlock(`${formatToolUseText(tool.name, parsed)}\n`);
+              }
+              toolUseMap.delete(sourceIndex);
+            }
+            return;
+          }
+
+          if (inner.type === "message_delta") {
+            return;
+          }
+
+          if (inner.type === "message_stop") {
+            return;
+          }
+        }
+
+        if (!sawStreamEvent && event.type === "assistant") {
           for (const part of event.message?.content || []) {
             if (part?.type === "tool_use") {
               const key = part.id || `${part.name}:${safeJson(part.input)}`;
@@ -633,6 +752,10 @@ function liveStreamResponse(
           if (!sawOutput && typeof event.result === "string") {
             emitTextBlock(event.result);
           }
+          for (const [, textIndex] of textBlockMap) {
+            enqueue(sse("content_block_stop", { type: "content_block_stop", index: textIndex }));
+          }
+          textBlockMap.clear();
           enqueue(sse("message_delta", {
             type: "message_delta",
             delta: { stop_reason: "end_turn", stop_sequence: null },
