@@ -15,7 +15,7 @@ function createModel(id: string, name: string) {
     id,
     providerID: CLAUDE_CLI_PROVIDER_ID,
     api: {
-      id: "anthropic",
+      id,
       url: "https://claude.ai/code",
       npm: "@ai-sdk/anthropic",
     },
@@ -71,6 +71,7 @@ function createModel(id: string, name: string) {
 function createModelMap() {
   return {
     "claude-opus-4-6": createModel("claude-opus-4-6", "Claude Opus 4.6"),
+    "claude-opus-4-7": createModel("claude-opus-4-7", "Claude Opus 4.7"),
     "claude-sonnet-4-6": createModel("claude-sonnet-4-6", "Claude Sonnet 4.6"),
     "claude-haiku-4-5": createModel("claude-haiku-4-5", "Claude Haiku 4.5"),
     opus: createModel("opus", "Claude Opus (latest alias)"),

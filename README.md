@@ -32,6 +32,7 @@ npm install -g opencode-claude-cli
 ## Models
 
 - `claude-opus-4-6`
+- `claude-opus-4-7`
 - `claude-sonnet-4-6`
 - `claude-haiku-4-5`
 
